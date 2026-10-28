@@ -23,8 +23,9 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 REMOTE="origin"
-DEFAULT_BRANCH="main"
-PLUGIN_BRANCH="plugin"
+# A fork publishes its own builds from its own branches (see RH.md).
+DEFAULT_BRANCH="${SOURCE_BRANCH:-main}"
+PLUGIN_BRANCH="${PLUGIN_BRANCH:-plugin}"
 PLUGIN_DIR="plugin"
 # Every entry of plugin/ belongs to exactly one list, so a new entry is a
 # decision rather than a silent omission or an accidental upload.
@@ -51,21 +52,40 @@ listed() {
     return 1
 }
 
+# X.Y.Z with an optional SemVer pre-release, such as 0.7.1-rh.1.
+VERSION_PATTERN='^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+(\.[0-9A-Za-z]+)*)?$'
+
 # The 0-based component of an X.Y.Z version.
 component() {
     local IFS=.
     # shellcheck disable=SC2206 # splitting on dots is the point
-    local parts=($1)
+    local parts=(${1%%-*})
     printf '%s' "$((10#${parts[$2]}))"
 }
 
+# SemVer precedence: a release is newer than its pre-releases, and numeric
+# pre-release identifiers compare as numbers.
 version_gt() {
-    local i
+    local i a b
     for i in 0 1 2; do
         [ "$(component "$1" "$i")" -gt "$(component "$2" "$i")" ] && return 0
         [ "$(component "$1" "$i")" -lt "$(component "$2" "$i")" ] && return 1
     done
-    return 1
+    [[ "$1" == *-* ]] || { [[ "$2" == *-* ]]; return; }
+    [[ "$2" == *-* ]] || return 1
+    local IFS=.
+    # shellcheck disable=SC2206 # splitting on dots is the point
+    a=(${1#*-}) b=(${2#*-})
+    for ((i = 0; i < ${#a[@]} && i < ${#b[@]}; i++)); do
+        [ "${a[i]}" = "${b[i]}" ] && continue
+        if [[ "${a[i]}${b[i]}" =~ ^[0-9]+$ ]]; then
+            [ "$((10#${a[i]}))" -gt "$((10#${b[i]}))" ]
+        else
+            [[ "${a[i]}" > "${b[i]}" ]]
+        fi
+        return
+    done
+    [ "${#a[@]}" -gt "${#b[@]}" ]
 }
 
 manifest_version() {
@@ -122,8 +142,8 @@ tree="$(printf '%s%s\n' "$entries" "$license" | git mktree)"
 # --- Version -----------------------------------------------------------------
 
 version="$(manifest_version "$tree")"
-[[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
-    || die "$PLUGIN_DIR/herdr-plugin.toml version '$version' is not X.Y.Z"
+[[ "$version" =~ $VERSION_PATTERN ]] \
+    || die "$PLUGIN_DIR/herdr-plugin.toml version '$version' is not X.Y.Z or X.Y.Z-<pre-release>"
 package_version="$(git show "$tree:package.json" \
     | node -p 'JSON.parse(require("fs").readFileSync(0, "utf8")).version')"
 [ "$package_version" = "$version" ] \
@@ -137,8 +157,8 @@ if [ -n "$parent" ]; then
         exit 0
     fi
     published_version="$(manifest_version "$parent")"
-    [[ "$published_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] \
-        || die "$REMOTE/$PLUGIN_BRANCH has version '$published_version', which is not X.Y.Z"
+    [[ "$published_version" =~ $VERSION_PATTERN ]] \
+        || die "$REMOTE/$PLUGIN_BRANCH has version '$published_version', which is not X.Y.Z or X.Y.Z-<pre-release>"
     # Heeler compares versions to tell users their plugin is outdated, so new
     # content under an old number would never reach them.
     version_gt "$version" "$published_version" \

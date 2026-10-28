@@ -191,6 +191,63 @@ git push --quiet origin main
 expect_refused "an entry that is neither shipped nor dev-only is refused" \
     "plugin/.npmrc is neither shipped nor dev-only" YES=1
 
+# A fork publishes pre-release versions from its own branch to its own
+# plugin branch, and leaves origin/plugin alone.
+git rm --quiet plugin/.npmrc
+git checkout --quiet -b rh
+sed -i.bak 's/0\.2\.0/0.2.0-rh.9/' plugin/herdr-plugin.toml plugin/package.json \
+    && rm plugin/*.bak
+git commit --quiet --all --message "fork version"
+git push --quiet origin rh
+plugin_before=$(published rev-parse plugin)
+publish YES=1 SOURCE_BRANCH=rh PLUGIN_BRANCH=plugin-rh
+if [ "$status" -eq 0 ] && [ "$(published rev-list --count plugin-rh)" = 1 ] \
+    && [ "$(published show plugin-rh:herdr-plugin.toml | grep '^version')" = 'version = "0.2.0-rh.9"' ] \
+    && published log -1 --format=%B plugin-rh | grep -qF "on rh." \
+    && [ "$(published rev-parse plugin)" = "$plugin_before" ]; then
+    pass "a fork publishes a pre-release from its own branch to its own plugin branch"
+else
+    fail "a fork publishes a pre-release from its own branch to its own plugin branch"
+fi
+
+echo 'export const answer = 5;' > plugin/src/index.js
+git commit --quiet --all --message "change without a fork bump"
+git push --quiet origin rh
+expect_refused_on() {
+    branch=$1
+    shift
+    before=$(published rev-parse --verify --quiet "$branch")
+    publish "${@:3}"
+    after=$(published rev-parse --verify --quiet "$branch")
+    if [ "$status" -ne 0 ] && grep -qF "$2" "$work/out" && [ "$before" = "$after" ]; then
+        pass "$1"
+    else
+        fail "$1: expected a refusal mentioning '$2' that leaves $branch alone"
+    fi
+}
+expect_refused_on plugin-rh "new content under the published pre-release is refused" \
+    "0.2.0-rh.9 is not newer than the published 0.2.0-rh.9" \
+    YES=1 SOURCE_BRANCH=rh PLUGIN_BRANCH=plugin-rh
+
+sed -i.bak 's/0\.2\.0-rh\.9/0.2.0-rh.10/' plugin/herdr-plugin.toml plugin/package.json \
+    && rm plugin/*.bak
+git commit --quiet --all --message "next fork version"
+git push --quiet origin rh
+publish YES=1 SOURCE_BRANCH=rh PLUGIN_BRANCH=plugin-rh
+if [ "$status" -eq 0 ] && [ "$(published rev-list --count plugin-rh)" = 2 ]; then
+    pass "pre-release numbers compare numerically (rh.10 is newer than rh.9)"
+else
+    fail "pre-release numbers compare numerically (rh.10 is newer than rh.9)"
+fi
+
+sed -i.bak 's/0\.2\.0-rh\.10/0.2.0-/' plugin/herdr-plugin.toml plugin/package.json \
+    && rm plugin/*.bak
+git commit --quiet --all --message "malformed fork version"
+git push --quiet origin rh
+expect_refused_on plugin-rh "a malformed pre-release is refused" \
+    "version '0.2.0-' is not X.Y.Z or X.Y.Z-<pre-release>" \
+    YES=1 SOURCE_BRANCH=rh PLUGIN_BRANCH=plugin-rh
+
 if [ "$failures" -ne 0 ]; then
     echo "$failures plugin publishing test(s) failed" >&2
     exit 1
