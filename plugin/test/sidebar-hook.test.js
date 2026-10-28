@@ -45,7 +45,8 @@ suite("sidebar hook process boundary", () => {
     const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
     // The app compares Hosts' plugins against this vector (plugin-version-v1.json).
     const shared = JSON.parse(readFileSync(new URL("../test-vectors/plugin-version-v1.json", import.meta.url), "utf8"));
-    assert.equal(manifest.version, shared.version);
+    // A fork build (0.7.1-rh.1, RH.md) is the release the app reads it as.
+    assert.equal(manifest.version.split("-")[0], shared.version);
     assert.equal(pkg.version, manifest.version);
     const lock = JSON.parse(readFileSync(new URL("../package-lock.json", import.meta.url), "utf8"));
     assert.equal(lock.version, manifest.version);
